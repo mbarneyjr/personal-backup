@@ -1,0 +1,9 @@
+artifacts
+*.packaged.*
+*.local.*
+*.local
+.vscode
+/images
+.idea
+*~
+node_modules

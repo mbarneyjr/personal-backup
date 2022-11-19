@@ -1,0 +1,6 @@
+{
+  "devDependencies": {
+    "cfn-changeset-viewer": "^0.0.3",
+    "cfn-event-tailer": "^0.0.2"
+  }
+}

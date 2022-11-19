@@ -1,0 +1,101 @@
+name: release-pr
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - labeled
+      - unlabeled
+    branches:
+      - dev
+      - feature/*
+
+env:
+  TARGET_ACCOUNT_ID: ${{ secrets.DEV_ACCOUNT_ID }}
+  DEVOPS_ACCOUNT_ID: ${{ secrets.DEVOPS_ACCOUNT_ID }}
+  ARTIFACT_BUCKET: ci-artifacts-${{ secrets.DEVOPS_ACCOUNT_ID }}-us-east-2
+  ARTIFACT_PREFIX: mbarney-backup
+  CHANGE_SET_NAME: release-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}
+  CHANGE_SET_DESCRIPTION: ${{ github.event.pull_request.title }}
+  APPLICATION_NAME: mbarney-backup
+
+permissions:
+  id-token: write
+  contents: write
+  packages: read
+
+jobs:
+  get_short_ref:
+    runs-on: ubuntu-latest
+    outputs:
+      short_ref: ${{ steps.short_ref_job.outputs.short_ref }}
+    steps:
+      - id: short_ref_job
+        name: Testing
+        run: |
+          echo "GITHUB_HEAD_REF: ${GITHUB_HEAD_REF}"
+          export SHORT_REF=$(echo ${GITHUB_HEAD_REF/feature\//} | cut -c -16)
+          echo "SHORT_REF: ${SHORT_REF}"
+          echo "short_ref=${SHORT_REF}" >> $GITHUB_OUTPUT
+  test:
+    runs-on: ubuntu-latest
+    container: ghcr.io/mbarneyjr/ci-docker-image:latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: lint
+        run: |
+          make lint
+  package:
+    needs: test
+    runs-on: ubuntu-latest
+    container: ghcr.io/mbarneyjr/ci-docker-image:latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Assume role
+        uses: aws-actions/configure-aws-credentials@v1-node16
+        with:
+          aws-region: us-east-2
+          role-to-assume: arn:aws:iam::${{ env.DEVOPS_ACCOUNT_ID }}:role/github-actions
+          role-session-name: GitHubActions-${{ github.run_id }}
+      - name: Package Code
+        run: |
+          make package
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ env.APPLICATION_NAME }}-${{ github.run_id }}
+          path: artifacts/
+  deploy_pr:
+    runs-on: ubuntu-latest
+    container: ghcr.io/mbarneyjr/ci-docker-image:latest
+    needs: [ get_short_ref, package ]
+    env:
+      ENVIRONMENT_NAME: ${{ needs.get_short_ref.outputs.short_ref }}
+    steps:
+      - uses: actions/checkout@v3
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: ${{ env.APPLICATION_NAME }}-${{ github.run_id }}
+          path: artifacts/
+      - name: Assume role
+        uses: aws-actions/configure-aws-credentials@v1-node16
+        with:
+          aws-region: us-east-2
+          role-to-assume: arn:aws:iam::${{ env.TARGET_ACCOUNT_ID }}:role/github-actions
+          role-session-name: GitHubActions-${{ github.run_id }}
+      - id: create_change_set
+        name: Create Change Set
+        run: |
+          make create-change-set
+          export CHANGE_SET_STATUS_REASON="$(cat artifacts/${STACK_NAME}-${CHANGE_SET_NAME}.json | jq -r .StatusReason)"
+          if [[ "$CHANGE_SET_STATUS_REASON" == "The submitted information didn't contain changes. Submit different information to create a change set." ]];
+          then
+            echo "no_changes=true" >> $GITHUB_OUTPUT
+          fi;
+      - name: Execute Change Set
+        if: ${{ steps.create_change_set.outputs.no_changes != 'true' }}
+        run: |
+          make deploy-change-set

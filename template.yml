@@ -1,0 +1,32 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Backup Solution
+
+
+Parameters:
+  ApplicationName:
+    Type: String
+    Description: The name of the application to deploy
+  EnvironmentName:
+    Type: String
+    Description: The name of the environment to deploy
+
+
+Resources:
+  Bucket:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./templates/bucket.yml
+      Parameters:
+        ApplicationName: !Ref ApplicationName
+        EnvironmentName: !Ref EnvironmentName
+      Tags:
+        - Key: workload
+          Value: !Sub ${ApplicationName}-${EnvironmentName}
+        - Key: component
+          Value: bucket
+
+
+Outputs:
+  BackupBucketName:
+    Description: The name of the S3 bucket where backups are stored
+    Value: !GetAtt Bucket.Outputs.BucketName
